@@ -85,7 +85,7 @@ def runTest(subject_session, testDate, modelDate):
     eventFile = testDate + '/GKP_Exp' + testDate + '.txt'
     paramFile = modelDate +'/param_' + modelDate + '.txt'
     X_test, Y_test = CE.load_testData(dataFile, eventFile, paramFile)
-    test_data = np.reshape(X_test,(len(X_test), 1, np.size(X_test,2), np.size(X_test,1)))
+    test_data = np.reshape(X_test,(len(X_test), np.size(X_test,1), np.size(X_test,2), 1)).swapaxes(1,3)
     test_label = Y_test-1
     (test_dataTS, test_labelTS) = map(torch.from_numpy, (test_data, test_label))
     [test_dataTS, test_labelTS] = [x.to(device=device) for x in [test_dataTS, test_labelTS]]
