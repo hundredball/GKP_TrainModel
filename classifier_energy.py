@@ -8,7 +8,7 @@ Created on Fri Mar 22 16:15:49 2019
 import numpy as np
 import re
 import matplotlib.pyplot as plt
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, lfilter, filtfilt
 from scipy.integrate import simps
 import scipy
 from sklearn.preprocessing import normalize, scale
@@ -16,6 +16,7 @@ from sklearn.svm import SVC
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 import functools
+from plot_confusion_matrix import plot_confusion_matrix
 
 def load_data(file):
     data = []
@@ -93,6 +94,17 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order = 5):
     y = lfilter(b,a,data, axis=0)
     return y
 
+def butter_highpass(cutoff, fs, order = 5):
+    nyq = 0.5*fs
+    normal_cutoff = cutoff/nyq
+    b, a = butter(order, normal_cutoff, btype='high', analog=False)
+    return b, a
+
+def butter_highpass_filter(data, cutoff, fs, order = 5):
+    b, a = butter_highpass(cutoff, fs, order=order)
+    y = lfilter(b, a, data, axis = 0)
+    return y
+
 def save(data):
     with open('fine_data.txt', 'w') as outfile:
         for slice_2d in data:
@@ -127,18 +139,26 @@ def split_windows(x,y):
 
     return X_train, Y_train
 
-def SVMclassify(X_train, Y_train, X_val, Y_val):
+def SVMClassify(X_train, Y_train, X_val, Y_val):
     clf = SVC(kernel = 'poly', degree=3)
     clf.fit(X_train, Y_train)
-    correct_num = sum(clf.predict(X_val) == Y_val)
+    pred_train = clf.predict(X_train)
+    pred_val = clf.predict(X_val)
+    
+    correct_num = sum(pred_val == Y_val)
+    val_accuracy = correct_num / len(Y_val)
     print('Validation')
     print('Total:', len(Y_val), ' | Correct:', correct_num)
-    print('Accuracy:', correct_num/len(Y_val))
+    print('Accuracy:', val_accuracy)
     
-    correct_num = sum(clf.predict(X_train) == Y_train)
+    correct_num = sum(pred_train == Y_train)
     print('Train')
     print('Total:', len(Y_train), ' | Correct:', correct_num)
     print('Accuracy:', correct_num/len(Y_train))
+    
+    pred_val = (pred_val-1).astype('int')
+    Y_val = (Y_val-1).astype('int')
+    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='SVM accuracy: {0}%'.format(val_accuracy*100), normalize=True)
     
 def XGBClassify(X_train, Y_train, X_val, Y_val):
     XG = XGBClassifier(
@@ -146,17 +166,23 @@ def XGBClassify(X_train, Y_train, X_val, Y_val):
             min_child_weight= 2, n_estimators= 50)
     
     XG.fit(X_train,Y_train,verbose=True)
+    pred_train = XG.predict(X_train)
+    pred_val = XG.predict(X_val)
     
-    correct_num = sum(XG.predict(X_val) == Y_val)
+    correct_num = sum(pred_val == Y_val)
+    val_accuracy = correct_num/len(Y_val)
     print('Validation')
     print('Total:', len(Y_val), ' | Correct:', correct_num)
-    print('Accuracy:', correct_num/len(Y_val))
+    print('Accuracy:', val_accuracy)
     
-    correct_num = sum(XG.predict(X_train) == Y_train)
+    correct_num = sum(pred_train == Y_train)
     print('Train')
     print('Total:', len(Y_train), ' | Correct:', correct_num)
     print('Accuracy:', correct_num/len(Y_train))
 
+    pred_val = (pred_val-1).astype('int')
+    Y_val = (Y_val-1).astype('int')
+    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='XGBoost accuracy: {0}%'.format(val_accuracy*100), normalize=True)
 # ------------------------ output data for EEGNet ---------------------
 def test(dataName, logName, saveParaName):
     # load data
@@ -267,112 +293,168 @@ def getBandPower(X):
     
     return X_bandpower
     
-#def test
-
-if __name__ == '__main__':
-    data = load_data('tongue_move_5channel_10-1.txt')
-    log = load_log('GKP_Exp0412.txt')
+def getStandardPSD(dataName, logName, saveParaName, standardize=True, test_size=0.1):
+    # load data
+    data = load_data(dataName)
+    log = load_log(logName)
     event, fine_time = get_event_and_time(log)
     
-    #split data with respect to fine_time , sample rate 125Hz
+    # split data with respect to fine_time , sample rate 125Hz, remove baseline => 90x750x5
     splited_data = split_data(data, fine_time)
     
-    '''concate data
-    con_split_data = np.zeros((90,800,5))
-    #save(fine_data)
-    #把後半部data複製一份接至data前面以做discrete filter
-    for i in range(split_data.shape[0]):
-        con = split_data[i,700:,:]
-        con_split_data[i] = np.concatenate((con,split_data[i]),axis=0)
+    # split data into training and validation => X_train(80x750x5), X_val(10x750x5)
+    X_train, X_val, Y_train, Y_val = train_test_split(splited_data, event, test_size = test_size, random_state=80)
     
-    '''
     
-    filt_split_data = np.zeros(splited_data.shape)
-    for i in range(splited_data.shape[0]):
-        filt_split_data[i] = butter_bandpass_filter(splited_data[i], 1, 50, 125, 5)
     
-#    scale_filt_split_data = np.zeros(filt_split_data.shape)
-#    for i in range(filt_split_data.shape[0]):
-#        scale_filt_split_data[i] = scale(filt_split_data[i],axis=1) #axis=1 normalize each sample independently
-   
-    
-    ''' random data and split train/val and split window'''
-    random_seed = 42
-    X_train, X_val, Y_train, Y_val = train_test_split(filt_split_data,event,test_size=0.1,random_state=random_seed)
-    
-#    mean = np.mean(X_train)
-#    std = np.std(X_train)
-#    X_train = (X_train-mean)/std
-#    X_val = (X_val-mean)/std
-    
+    # split windows of 2 sec => X_train(800x750x5), X_val(100x750x5)
     X_train, Y_train = split_windows(X_train, Y_train)
     X_val, Y_val = split_windows(X_val, Y_val)
     
-    X_train, t, Y_train, tt = train_test_split(X_train,Y_train,test_size=0.0,random_state=random_seed)
-    X_val, t, Y_val, tt = train_test_split(X_val,Y_val,test_size=0.0,random_state=random_seed)
+    X_train_before = X_train.copy()
+    # highpass filter: cutoff, 1HZ
+    '''
+    for i in range(X_train.shape[0]):
+        X_train[i] = butter_highpass_filter(X_train[i], 1, 125, 5)
+    for i in range(X_val.shape[0]):
+        X_val[i] = butter_highpass_filter(X_val[i], 1, 125, 5)
+    '''
     
-    '''calculate sum of square of each frames'''
-#    X_train_energy = []
-#    X_val_energy = []
-#    for sample in X_train:
-#        X_train_energy.append(np.sum(np.square(sample),axis=0)/np.size(sample,0))
-#        
-#    for sample in X_val:
-#        X_val_energy.append(np.sum(np.square(sample),axis=0)/np.size(sample,0))
-#    
-#    X_train_energy = np.array(X_train_energy)
-#    X_val_energy = np.array(X_val_energy)
+    X_train = X_train[:,10:,:]
+    X_val = X_val[:,10:,:]
+    X_trian_org = X_train.copy()
+    # get psd of each sample
+    fs = 125
+    multiplier = 2/1
+    win = multiplier*fs
+    freq_res = 1/multiplier
+    upper_freq = 50
+    X_train_psd = np.zeros((X_train.shape[0], upper_freq-1, X_train.shape[2]))
+    X_val_psd = np.zeros((X_val.shape[0], upper_freq-1, X_val.shape[2]))
+    simps_dx = functools.partial(simps, dx=freq_res)
     
-    ''' Specific feature (0-4, 1-3, 2) '''
-#    X_train_feature = np.array([X_train_energy[:,0]-X_train_energy[:,4] , X_train_energy[:,1]-X_train_energy[:,3],
-#                                X_train_energy[:,2]]).T
-#    X_val_feature = np.array([X_val_energy[:,0]-X_val_energy[:,4] , X_val_energy[:,1]-X_val_energy[:,3],
-#                                X_val_energy[:,2]]).T
+    for i, X in enumerate([X_train, X_val]):
+        for sample in range(X.shape[0]):
+            for channel in range(X.shape[2]):
+                freqs, psd = scipy.signal.welch(X[sample, :, channel], fs, nperseg=win)
+                for freq_i in range(upper_freq-1):
+                    if i==0:
+                        X_train_psd[sample, freq_i, channel] = simps_dx(psd[2*freq_i:2*freq_i+3])
+                    else:
+                        X_val_psd[sample, freq_i, channel] = simps_dx(psd[2*freq_i:2*freq_i+3])
+
+    # standardize data by mean and std of training data
+    if standardize:
+        mean = np.mean(X_train_psd)
+        std = np.std(X_train_psd)
+        X_train_psd = (X_train_psd-mean)/std
+        X_val_psd = (X_val_psd-mean)/std
     
-    ''' concate energy and difference '''
-#    X_train_energy_feature = np.delete(np.concatenate((X_train_energy, X_train_feature), axis=1), 7, 1)
-#    X_val_energy_feature = np.delete(np.concatenate((X_val_energy, X_val_feature), axis=1), 7, 1)
+    # randomize training data
+    X_train_psd, t, Y_train, tt = train_test_split(X_train_psd,Y_train,test_size=0.0,random_state=52)
     
-    ''' flatten X_train and X_val '''
-#    X_train_flatten = np.reshape(X_train, (X_train.shape[0], X_train.shape[1]*X_train.shape[2]))
-#    X_val_flatten = np.reshape(X_val, (X_val.shape[0], X_val.shape[1]*X_val.shape[2]))
+    return X_train_psd, Y_train, X_val_psd, Y_val
+
+def compareEnergy(X_train, Y_train, X_val, Y_val):
     
-    ''' Calculate band power '''
-    X_train_bandpower = getBandPower(X_train)
-    X_val_bandpower = getBandPower(X_val)
-    X_train_bandpower = np.reshape(X_train_bandpower, (X_train_bandpower.shape[0], X_train_bandpower.shape[1]*X_train_bandpower.shape[2]))
-    X_val_bandpower = np.reshape(X_val_bandpower, (X_val_bandpower.shape[0], X_val_bandpower.shape[1]*X_val_bandpower.shape[2]))
+    # subtract each channels of validation data from means of rest training data
+    rest_data = X_train[Y_train==3]
+    mean = np.mean(rest_data, axis=(0,1))
+    for i in range(X_val.shape[2]):
+        X_val[:,:,i] -= mean[i]
     
-    mean = np.mean(X_train_bandpower)
-    std = np.std(X_train_bandpower)
-    X_train_bandpower = (X_train_bandpower-mean)/std
-    X_val_bandpower = (X_val_bandpower-mean)/std
-    
-    '''raw data to SVM, or energy to SVM'''
-#    SVMclassify(X_train_energy, Y_train, X_val_energy, Y_val)
-#    SVMclassify(X_train_feature, Y_train, X_val_feature, Y_val)
-#    SVMclassify(X_train_energy_feature, Y_train, X_val_energy_feature, Y_val)
-    print('------------SVM-------------')
-    SVMclassify(X_train_bandpower, Y_train, X_val_bandpower, Y_val)
-#    XGBClassify(X_train_flatten, Y_train, X_val_flatten, Y_val)
-    print('------------XGB-------------')
-    XGBClassify(X_train_bandpower, Y_train, X_val_bandpower, Y_val)
-    
-    ''' based on energy '''
-#    right_energy = 0
-#    left_energy = 0
-#    for i in range(len(X_train_energy_part)):
+    pred = np.array([0]*X_val.shape[0])
+
+    correct = 0
+    num_left_right = 0
+    start_frequency = 2
+    assert start_frequency >= 1, 'in X_val, first element is 1 HZ'
+    for sample in range(X_val.shape[0]):
+        left_energy = np.sum(X_val[sample, 5:, :2])
+        right_energy = np.sum(X_val[sample, 5:, 3:])
         
+        if left_energy > right_energy:
+            pred[sample] = 1
+        else:
+            pred[sample] = 2
+        
+        if Y_val[sample] == 1 or Y_val[sample] == 2:
+            num_left_right += 1
+            if pred[sample] == Y_val[sample]:
+                correct += 1
     
+    accuracy = correct/num_left_right
+    print('Accuracy of left and right: {0}%'.format(accuracy*100))
+    pred = (pred-1).astype('int')
+    Y_val = (Y_val-1).astype('int')
+    plot_confusion_matrix(Y_val, pred, np.array(['left', 'right', 'rest']), title='Left/right Accuracy {0}%'.format(accuracy*100), normalize=True)
+
+def compareMax(dataName, logName):
+    # load data
+    data = load_data(dataName)
+    log = load_log(logName)
+    event, fine_time = get_event_and_time(log)
     
-    #normalize
-#    fine_data = np.zeros(split_data.shape)
-#    for i in range(fine_data.shape[0]):
-#        fine_data[i] = scale(split_data[i],axis=1) #axis=1 normalize each sample independently
+    # split data with respect to fine_time , sample rate 125Hz, remove baseline => 90x750x5
+    splited_data = split_data(data, fine_time)
     
-#    
-    #channelwise normalize data to 0~1
-    #for i in range(fine_data.shape[2]):
+    # split windows of 2 sec
+    X, Y = split_windows(splited_data, event)
+
+    # highpass filter: cutoff, 1HZ
+    for i in range(X.shape[0]):
+        X[i] = butter_highpass_filter(X[i], 1, 125, 5)
+
+    # compare the maximum of each trial
+    pred = np.zeros(len(Y))
+    num_left_right = 0
+    correct = 0
+    for sample in range(len(X)):
+        
+        left_max = np.max(X[sample,:,:2])
+        right_max = np.max(X[sample,:,3:])
+        if left_max > right_max:
+            pred[sample] = 1
+        else:
+            pred[sample] = 2
+            
+        if Y[sample] == 1 or Y[sample] == 2:
+            num_left_right += 1
+            if pred[sample] == Y[sample]:
+                correct += 1
+                
+    accuracy = correct / num_left_right
+    pred = (pred-1).astype('int')
+    Y = (Y-1).astype('int')
+    plot_confusion_matrix(Y,pred, np.array(['left','right','rest']), title='CompareMax, Left/Right Accuracy {0}%'.format(accuracy*100), normalize=True)
+
+if __name__ == '__main__':
+    subject_session = '11-2'
+    date = '0424'
+    
+    dataFile = date + '/tongue_move_5channel_' + subject_session + '.txt'
+    eventFile = date + '/GKP_Exp' + date + '.txt'
+    paramFile = date + '/param_' + date + '.txt'
+    
+    # get standardized data
+#    X_train, train_label, X_val, test_label = test(dataFile, eventFile, paramFile)
+    
+    # get standardized PSD
+    X_train, train_label, X_val, test_label = getStandardPSD(dataFile, eventFile, paramFile, standardize=False, test_size=0.9)
+    
+    '''Compare left and right energy'''
+    compareEnergy(X_train, train_label, X_val, test_label)
+    
+    '''Compare left and right max value'''
+    #compareMax(dataFile, eventFile)
+
+    '''SVM, XGB'''
+#    X_train = X_train.reshape(X_train.shape[0], -1)
+#    X_val = X_val.reshape(X_val.shape[0], -1)
+#    print('------------SVM-------------')
+#    SVMClassify(X_train, train_label, X_val, test_label)
+#    print('------------XGB-------------')
+#    XGBClassify(X_train, train_label, X_val, test_label)
         
     
     
