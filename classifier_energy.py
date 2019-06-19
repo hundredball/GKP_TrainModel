@@ -18,6 +18,7 @@ from xgboost import XGBClassifier
 import functools
 from plot_confusion_matrix import plot_confusion_matrix
 
+'''-----------Preprocessing------------'''
 def load_data(file):
     data = []
     with open(file,'r') as fin:
@@ -139,72 +140,54 @@ def split_windows(x,y):
 
     return X_train, Y_train
 
-def SVMClassify(X_train, Y_train, X_val, Y_val):
-    clf = SVC(kernel = 'poly', degree=3)
-    clf.fit(X_train, Y_train)
-    pred_train = clf.predict(X_train)
-    pred_val = clf.predict(X_val)
+def preprocessing(dataName, logName, test_size):
     
-    correct_num = sum(pred_val == Y_val)
-    val_accuracy = correct_num / len(Y_val)
-    print('Validation')
-    print('Total:', len(Y_val), ' | Correct:', correct_num)
-    print('Accuracy:', val_accuracy)
-    
-    correct_num = sum(pred_train == Y_train)
-    print('Train')
-    print('Total:', len(Y_train), ' | Correct:', correct_num)
-    print('Accuracy:', correct_num/len(Y_train))
-    
-    pred_val = (pred_val-1).astype('int')
-    Y_val = (Y_val-1).astype('int')
-    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='SVM accuracy: {0}%'.format(val_accuracy*100), normalize=True)
-    
-def XGBClassify(X_train, Y_train, X_val, Y_val):
-    XG = XGBClassifier(
-            colsample_bytree= 0.9, gamma= 2, max_delta_step= 5, max_depth= 8,
-            min_child_weight= 2, n_estimators= 50)
-    
-    XG.fit(X_train,Y_train,verbose=True)
-    pred_train = XG.predict(X_train)
-    pred_val = XG.predict(X_val)
-    
-    correct_num = sum(pred_val == Y_val)
-    val_accuracy = correct_num/len(Y_val)
-    print('Validation')
-    print('Total:', len(Y_val), ' | Correct:', correct_num)
-    print('Accuracy:', val_accuracy)
-    
-    correct_num = sum(pred_train == Y_train)
-    print('Train')
-    print('Total:', len(Y_train), ' | Correct:', correct_num)
-    print('Accuracy:', correct_num/len(Y_train))
-
-    pred_val = (pred_val-1).astype('int')
-    Y_val = (Y_val-1).astype('int')
-    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='XGBoost accuracy: {0}%'.format(val_accuracy*100), normalize=True)
-# ------------------------ output data for EEGNet ---------------------
-def test(dataName, logName, saveParaName):
     # load data
     data = load_data(dataName)
     log = load_log(logName)
     event, fine_time = get_event_and_time(log)
     
+    # highpass filter: cutoff, 1HZ
+    filt_data = butter_highpass_filter(data, 1, 125, 5)
+    
     # split data with respect to fine_time , sample rate 125Hz, remove baseline => 90x750x5
-    splited_data = split_data(data, fine_time)
+    splited_data = split_data(filt_data, fine_time)
     
     # split data into training and validation => X_train(80x750x5), X_val(10x750x5)
-    X_train, X_val, Y_train, Y_val = train_test_split(splited_data, event, test_size = 0.1, random_state=42)
+    X_train, X_val, Y_train, Y_val = train_test_split(splited_data, event, test_size = test_size, random_state=80)
     
     # split windows of 2 sec => X_train(800x750x5), X_val(100x750x5)
     X_train, Y_train = split_windows(X_train, Y_train)
     X_val, Y_val = split_windows(X_val, Y_val)
+        
+    return X_train, Y_train, X_val, Y_val
 
-    # bandpass filter 1-50
-    for i in range(X_train.shape[0]):
-        X_train[i] = butter_bandpass_filter(X_train[i], 1, 50, 125, 5)
-    for i in range(X_val.shape[0]):
-        X_val[i] = butter_bandpass_filter(X_val[i], 1, 50, 125, 5)
+'''-----------------------------------------------------------'''
+
+
+# ------------------------ output data for EEGNet ---------------------
+def getProcessedData(dataName, logName, saveParaName):
+#    # load data
+#    data = load_data(dataName)
+#    log = load_log(logName)
+#    event, fine_time = get_event_and_time(log)
+#    
+#    # split data with respect to fine_time , sample rate 125Hz, remove baseline => 90x750x5
+#    splited_data = split_data(data, fine_time)
+#    
+#    # split data into training and validation => X_train(80x750x5), X_val(10x750x5)
+#    X_train, X_val, Y_train, Y_val = train_test_split(splited_data, event, test_size = 0.1, random_state=42)
+#    
+#    # split windows of 2 sec => X_train(800x750x5), X_val(100x750x5)
+#    X_train, Y_train = split_windows(X_train, Y_train)
+#    X_val, Y_val = split_windows(X_val, Y_val)
+#
+#    # bandpass filter 1-50
+#    for i in range(X_train.shape[0]):
+#        X_train[i] = butter_bandpass_filter(X_train[i], 1, 50, 125, 5)
+#    for i in range(X_val.shape[0]):
+#        X_val[i] = butter_bandpass_filter(X_val[i], 1, 50, 125, 5)
+    X_train, Y_train, X_val, Y_val = preprocessing(dataName, logName, test_size=0.1)
         
     # standardize data using training data, take data point in 0,2,4 secs
     X_train_specificPoint = []
@@ -265,6 +248,7 @@ def output_testData(dataName, logName):
     
     return splited_data, event
 
+'''---------------------Get energy--------------------'''
 def getBandPower(X):
     # Define sampling rate and window length
 #    X = filt_split_data
@@ -294,35 +278,12 @@ def getBandPower(X):
     return X_bandpower
     
 def getStandardPSD(dataName, logName, saveParaName, standardize=True, test_size=0.1):
-    # load data
-    data = load_data(dataName)
-    log = load_log(logName)
-    event, fine_time = get_event_and_time(log)
+
+    X_train, Y_train, X_val, Y_val = preprocessing(dataName, logName, test_size)
     
-    # split data with respect to fine_time , sample rate 125Hz, remove baseline => 90x750x5
-    splited_data = split_data(data, fine_time)
+#    X_train = X_train[:,10:,:]
+#    X_val = X_val[:,10:,:]
     
-    # split data into training and validation => X_train(80x750x5), X_val(10x750x5)
-    X_train, X_val, Y_train, Y_val = train_test_split(splited_data, event, test_size = test_size, random_state=80)
-    
-    
-    
-    # split windows of 2 sec => X_train(800x750x5), X_val(100x750x5)
-    X_train, Y_train = split_windows(X_train, Y_train)
-    X_val, Y_val = split_windows(X_val, Y_val)
-    
-    X_train_before = X_train.copy()
-    # highpass filter: cutoff, 1HZ
-    '''
-    for i in range(X_train.shape[0]):
-        X_train[i] = butter_highpass_filter(X_train[i], 1, 125, 5)
-    for i in range(X_val.shape[0]):
-        X_val[i] = butter_highpass_filter(X_val[i], 1, 125, 5)
-    '''
-    
-    X_train = X_train[:,10:,:]
-    X_val = X_val[:,10:,:]
-    X_trian_org = X_train.copy()
     # get psd of each sample
     fs = 125
     multiplier = 2/1
@@ -354,6 +315,53 @@ def getStandardPSD(dataName, logName, saveParaName, standardize=True, test_size=
     X_train_psd, t, Y_train, tt = train_test_split(X_train_psd,Y_train,test_size=0.0,random_state=52)
     
     return X_train_psd, Y_train, X_val_psd, Y_val
+'''---------------------------------------------------'''
+
+'''------------------Classifier-----------------------'''
+def SVMClassify(X_train, Y_train, X_val, Y_val):
+    clf = SVC(kernel = 'poly', degree=3)
+    clf.fit(X_train, Y_train)
+    pred_train = clf.predict(X_train)
+    pred_val = clf.predict(X_val)
+    
+    correct_num = sum(pred_val == Y_val)
+    val_accuracy = correct_num / len(Y_val)
+    print('Validation')
+    print('Total:', len(Y_val), ' | Correct:', correct_num)
+    print('Accuracy:', val_accuracy)
+    
+    correct_num = sum(pred_train == Y_train)
+    print('Train')
+    print('Total:', len(Y_train), ' | Correct:', correct_num)
+    print('Accuracy:', correct_num/len(Y_train))
+    
+    pred_val = (pred_val-1).astype('int')
+    Y_val = (Y_val-1).astype('int')
+    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='SVM accuracy: {0}%'.format(val_accuracy*100), normalize=True)
+    
+def XGBClassify(X_train, Y_train, X_val, Y_val):
+    XG = XGBClassifier(
+            colsample_bytree= 0.9, gamma= 2, max_delta_step= 5, max_depth= 8,
+            min_child_weight= 2, n_estimators= 50)
+    
+    XG.fit(X_train,Y_train,verbose=True)
+    pred_train = XG.predict(X_train)
+    pred_val = XG.predict(X_val)
+    
+    correct_num = sum(pred_val == Y_val)
+    val_accuracy = correct_num/len(Y_val)
+    print('Validation')
+    print('Total:', len(Y_val), ' | Correct:', correct_num)
+    print('Accuracy:', val_accuracy)
+    
+    correct_num = sum(pred_train == Y_train)
+    print('Train')
+    print('Total:', len(Y_train), ' | Correct:', correct_num)
+    print('Accuracy:', correct_num/len(Y_train))
+
+    pred_val = (pred_val-1).astype('int')
+    Y_val = (Y_val-1).astype('int')
+    plot_confusion_matrix(Y_val, pred_val, np.array(['left', 'right', 'rest']), title='XGBoost accuracy: {0}%'.format(val_accuracy*100), normalize=True)
 
 def compareEnergy(X_train, Y_train, X_val, Y_val):
     
@@ -427,6 +435,7 @@ def compareMax(dataName, logName):
     pred = (pred-1).astype('int')
     Y = (Y-1).astype('int')
     plot_confusion_matrix(Y,pred, np.array(['left','right','rest']), title='CompareMax, Left/Right Accuracy {0}%'.format(accuracy*100), normalize=True)
+'''-------------------------------------------------------------'''
 
 if __name__ == '__main__':
     subject_session = '11-2'
@@ -437,7 +446,7 @@ if __name__ == '__main__':
     paramFile = date + '/param_' + date + '.txt'
     
     # get standardized data
-#    X_train, train_label, X_val, test_label = test(dataFile, eventFile, paramFile)
+#    X_train, train_label, X_val, test_label = getProcessedData(dataFile, eventFile, paramFile)
     
     # get standardized PSD
     X_train, train_label, X_val, test_label = getStandardPSD(dataFile, eventFile, paramFile, standardize=False, test_size=0.9)
